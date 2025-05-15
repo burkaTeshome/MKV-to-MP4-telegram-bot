@@ -81,11 +81,6 @@ async def webhook_handler(request):
     await app.process_update(update)
     return web.Response()
 
-async def setup_webhook():
-    await app.bot.set_webhook(f"{WEBHOOK_URL}/webhook")
-
-app = None  # Global for webhook_handler
-
 def main():
     global app
     app = Application.builder().token(TOKEN).build()
@@ -94,13 +89,19 @@ def main():
     app.add_handler(MessageHandler(filters.Document.ALL, handle_file))
     app.add_error_handler(error_handler)
 
+    # Set up webhook server
     web_app = web.Application()
     web_app.router.add_post("/webhook", webhook_handler)
 
-    # Run the server
-    web.run_app(web_app, host="0.0.0.0", port=WEBHOOK_PORT, loop=app.loop)
+    # Set Telegram webhook
+    async def setup_webhook():
+        await app.bot.set_webhook(f"{WEBHOOK_URL}/webhook")
+        logger.info(f"Webhook set to {WEBHOOK_URL}/webhook")
+
+    # Run setup_webhook and start the server
+    loop = app.loop
+    loop.run_until_complete(setup_webhook())
+    web.run_app(web_app, host="0.0.0.0", port=WEBHOOK_PORT, loop=loop)
 
 if __name__ == "__main__":
-    import asyncio
-    asyncio.get_event_loop().run_until_complete(setup_webhook())
     main()
