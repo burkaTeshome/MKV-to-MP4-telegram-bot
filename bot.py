@@ -10,6 +10,7 @@ from telegram.ext import (
 from aiohttp import web
 import ffmpeg
 import logging
+import asyncio
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -76,32 +77,47 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Update {update} caused error {context.error}")
     await update.message.reply_text("An error occurred. Please try again.")
 
-async def webhook_handler(request):
-    update = Update.de_json(await request.json(), app.bot)
-    await app.process_update(update)
-    return web.Response()
+async def webhook_handler(request, application):
+    try:
+        update = Update.de_json(await request.json(), application.bot)
+        if update:
+            await application.process_update(update)
+        return web.Response(status=200)
+    except Exception as e:
+        logger.error(f"Webhook error: {e}")
+        return web.Response(status=500)
 
-def main():
-    global app
-    app = Application.builder().token(TOKEN).build()
+async def main():
+    # Initialize Application
+    application = Application.builder().token(TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.Document.ALL, handle_file))
-    app.add_error_handler(error_handler)
+    # Add handlers
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.Document.ALL, handle_file))
+    application.add_error_handler(error_handler)
 
-    # Set up webhook server
-    web_app = web.Application()
-    web_app.router.add_post("/webhook", webhook_handler)
-
-    # Set Telegram webhook
-    async def setup_webhook():
-        await app.bot.set_webhook(f"{WEBHOOK_URL}/webhook")
+    # Set up webhook
+    try:
+        await application.bot.set_webhook(f"{WEBHOOK_URL}/webhook")
         logger.info(f"Webhook set to {WEBHOOK_URL}/webhook")
+    except Exception as e:
+        logger.error(f"Failed to set webhook: {e}")
+        raise
 
-    # Run setup_webhook and start the server
-    loop = app.loop
-    loop.run_until_complete(setup_webhook())
-    web.run_app(web_app, host="0.0.0.0", port=WEBHOOK_PORT, loop=loop)
+    # Initialize aiohttp app
+    web_app = web.Application()
+    web_app.router.add_post("/webhook", lambda request: webhook_handler(request, application))
+
+    # Start webhook server
+    runner = web.AppRunner(web_app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", WEBHOOK_PORT)
+    await site.start()
+
+    # Keep the application running
+    await application.initialize()
+    await application.start()
+    await asyncio.Event().wait()  # Keep running indefinitely
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
